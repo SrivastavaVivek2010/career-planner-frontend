@@ -1,0 +1,1327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Personal Career Plan Generator — AI-powered learning planner</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.min.js"></script>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background-color: #F0F7F4;
+    background-image:
+      radial-gradient(at 0% 0%, hsla(170, 60%, 88%, 0.55) 0px, transparent 50%),
+      radial-gradient(at 100% 0%, hsla(160, 50%, 90%, 0.50) 0px, transparent 50%),
+      radial-gradient(at 100% 100%, hsla(180, 55%, 88%, 0.45) 0px, transparent 50%),
+      radial-gradient(at 0% 100%, hsla(150, 50%, 90%, 0.40) 0px, transparent 50%);
+    background-attachment: fixed;
+    min-height: 100vh;
+  }
+  .page-frame {
+    background: rgba(255, 255, 255, 0.65);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(15, 110, 86, 0.12);
+    border-radius: 24px;
+    box-shadow: 0 4px 24px rgba(15, 110, 86, 0.06), 0 1px 0 rgba(255, 255, 255, 0.6) inset;
+  }
+  .date-badge {
+    background: rgba(255, 255, 255, 0.75);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(15, 110, 86, 0.15);
+  }
+  .step-active { color: #0F6E56; font-weight: 500; }
+  .skill-pill { user-select: none; }
+  .skill-pill:active { cursor: grabbing; }
+  .fade-in { animation: fadeIn 0.3s ease-out; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .pulse-dot { animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+  .pulse-dot:nth-child(2) { animation-delay: 0.2s; }
+  .pulse-dot:nth-child(3) { animation-delay: 0.4s; }
+  .surface-card {
+    background: white;
+    border-radius: 16px;
+    box-shadow: 0 1px 2px rgba(15,110,86,0.04), 0 4px 16px rgba(15,110,86,0.06);
+    transition: box-shadow 0.2s ease, transform 0.2s ease;
+  }
+  .surface-card:hover {
+    box-shadow: 0 1px 2px rgba(15,110,86,0.04), 0 8px 24px rgba(15,110,86,0.10);
+  }
+  .btn-lift {
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  .btn-lift:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(15,110,86,0.18);
+  }
+  .btn-lift:active:not(:disabled) {
+    transform: translateY(0);
+  }
+  .gradient-text {
+    background: linear-gradient(135deg, #0F6E56 0%, #14B8A6 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .progress-pill {
+    transition: all 0.3s ease;
+  }
+  @media print {
+    .no-print { display: none !important; }
+    body { background: white; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useMemo } = React;
+
+// ============================================================
+// CONFIG
+// ============================================================
+const APP_CONFIG = {
+  name: "Personal Career Plan Generator",
+  tagline: "An AI-built learning plan, tailored to your goals and timeline",
+  // ⬇ CHANGE THIS to your Railway backend URL after deploying ⬇
+  backendUrl: "https://career-planner-backend-production.up.railway.app",
+  // ⬆ End of editable config ⬆
+  maxPlansPerSession: 3,
+  contactEmail: "vivek.srivastava.v1991@gmail.com",
+  linkedinUrl: "https://www.linkedin.com/in/vivek-srivastava-v1991",
+};
+
+// ============================================================
+// HELPERS
+// ============================================================
+function fmt(d) {
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  return `${dd}-${mm}-${yyyy}`;
+}
+
+function addDays(base, days) {
+  const d = new Date(base.getTime());
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+// ============================================================
+// SESSION TRACKING (anti-abuse)
+// ============================================================
+function getSessionCount() {
+  try {
+    const data = JSON.parse(window.sessionStorage.getItem('plan_session') || '{"count":0}');
+    return data.count || 0;
+  } catch { return 0; }
+}
+
+function incSessionCount() {
+  try {
+    const cur = getSessionCount();
+    window.sessionStorage.setItem('plan_session', JSON.stringify({ count: cur + 1, ts: Date.now() }));
+  } catch {}
+}
+
+// ============================================================
+// PLAN GENERATION (rule-based fallback if no API key)
+// ============================================================
+function generateRuleBasedPlan(input) {
+  const { weeks, hoursPerDay, working, techSkills, nonTechSkills, age } = input;
+  const startDate = new Date();
+  const phaseCount = Math.min(4, Math.max(2, Math.ceil(weeks / 4)));
+  const weeksPerPhase = Math.ceil(weeks / phaseCount);
+
+  const phases = [];
+  for (let p = 1; p <= phaseCount; p++) {
+    const startWeek = (p - 1) * weeksPerPhase + 1;
+    const endWeek = Math.min(p * weeksPerPhase, weeks);
+    const phaseFocus = p === 1 ? "Foundation + habit anchoring"
+                     : p === phaseCount ? "Portfolio consolidation + job-ready polish"
+                     : `Deep work on track ${p - 1}`;
+    phases.push({
+      number: p,
+      weeks: `${startWeek}-${endWeek}`,
+      dates: `${fmt(addDays(startDate, (startWeek - 1) * 7))} to ${fmt(addDays(startDate, endWeek * 7 - 1))}`,
+      focus: phaseFocus,
+    });
+  }
+
+  const actions = [];
+  const allSkills = [...techSkills, ...nonTechSkills];
+  const dailyMinutes = Math.round((hoursPerDay * 60) / Math.max(1, allSkills.length));
+
+  techSkills.forEach((skill, i) => {
+    const priority = i + 1;
+    actions.push({
+      phase: `Phase 1`,
+      week: "1-3",
+      track: skill,
+      action: `Foundation: free resources + 1 structured course on ${skill}. Build a "hello world" project to anchor learning.`,
+      cadence: `~${dailyMinutes}min/day x ${working ? '5' : '6'} days`,
+      target: fmt(addDays(startDate, 21)),
+    });
+    actions.push({
+      phase: `Phase 2`,
+      week: `4-${Math.min(weeks, 9)}`,
+      track: skill,
+      action: `Intermediate ${skill}: complete primary course + build a project that demonstrates real understanding. Push to GitHub.`,
+      cadence: `~${dailyMinutes}min/day`,
+      target: fmt(addDays(startDate, Math.min(weeks, 9) * 7)),
+    });
+    if (phaseCount >= 3) {
+      actions.push({
+        phase: `Phase 3`,
+        week: `${Math.min(weeks, 10)}-${Math.min(weeks, 12)}`,
+        track: skill,
+        action: `Apply ${skill} to a real or freelance problem. Write a public retrospective post.`,
+        cadence: `~${dailyMinutes}min/day`,
+        target: fmt(addDays(startDate, Math.min(weeks, 12) * 7)),
+      });
+    }
+  });
+
+  nonTechSkills.forEach((skill, i) => {
+    actions.push({
+      phase: `Phase 1`,
+      week: "1-3",
+      track: skill,
+      action: `Choose 1 book + 1 podcast + 1 community for ${skill}. Set weekly practice cadence.`,
+      cadence: "Weekly",
+      target: fmt(addDays(startDate, 21)),
+    });
+    actions.push({
+      phase: `Phase 2`,
+      week: `4-${Math.min(weeks, 9)}`,
+      track: skill,
+      action: `Practice ${skill} in real situations. Journal weekly on what worked.`,
+      cadence: "Weekly",
+      target: fmt(addDays(startDate, Math.min(weeks, 9) * 7)),
+    });
+  });
+
+  actions.push({
+    phase: `Phase 1`,
+    week: "1",
+    track: "GitHub",
+    action: "Polish GitHub profile README. Create repo shells for each skill being learned. Add LinkedIn link.",
+    cadence: "One-off",
+    target: fmt(addDays(startDate, 7)),
+  });
+
+  actions.push({
+    phase: `Phase ${phaseCount}`,
+    week: `${weeks - 2}-${weeks}`,
+    track: "Portfolio",
+    action: "Polish all repos. Write capstone project showcase. Publish on LinkedIn.",
+    cadence: "Project",
+    target: fmt(addDays(startDate, weeks * 7)),
+  });
+
+  const rules = [
+    {
+      rule: "Drop priority if anything gives",
+      detail: `Lowest-priority skill first, then non-tech. NEVER drop: top tech skill (${techSkills[0] || "your #1"}), daily habit, weekly GitHub commits.`
+    },
+    {
+      rule: "Reality-check checkpoint",
+      detail: `End of Week ${Math.ceil(weeks / 4)}: if pace is too aggressive, extend the plan by 2 weeks rather than cutting tracks.`
+    },
+    {
+      rule: "GitHub discipline",
+      detail: "Friday 30-min wrap-up + Saturday 1-hr documentation. No filler commits."
+    },
+    {
+      rule: "Public output",
+      detail: "Minimum 1 LinkedIn post per 2 weeks. Showcases work, attracts opportunities."
+    },
+  ];
+
+  return { phases, actions, rules, weeks, hoursPerDay, generatedAt: new Date().toISOString(), source: "rule-based" };
+}
+
+// ============================================================
+// AI PLAN GENERATION (via backend)
+// ============================================================
+async function generateAIPlan(input) {
+  const response = await fetch(`${APP_CONFIG.backendUrl}/api/generate-plan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+
+  if (!response.ok) {
+    const errData = await response.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(errData.error || `Server error ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data.plan;
+}
+
+// ============================================================
+// PAYMENT VERIFICATION (via backend)
+// ============================================================
+async function verifyPayment(paymentId, planHash) {
+  const response = await fetch(`${APP_CONFIG.backendUrl}/api/verify-payment`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ paymentId, planHash }),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || 'Payment verification failed');
+  }
+  return data;
+}
+
+// ============================================================
+// WORD DOCUMENT GENERATION
+// ============================================================
+async function generateDocx(plan, userName) {
+  const docx = window.docx;
+  if (!docx) throw new Error("docx library not loaded");
+
+  const {
+    Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
+    AlignmentType, PageOrientation, HeadingLevel, BorderStyle, WidthType,
+    ShadingType, VerticalAlign,
+  } = docx;
+
+  const border = { style: BorderStyle.SINGLE, size: 4, color: "B0B0B0" };
+  const borders = { top: border, bottom: border, left: border, right: border };
+  const headerBorder = { style: BorderStyle.SINGLE, size: 6, color: "2E5C8A" };
+  const headerBorders = { top: headerBorder, bottom: headerBorder, left: headerBorder, right: headerBorder };
+
+  const txt = (text, opts = {}) => new TextRun({
+    text: String(text), font: "Calibri", size: opts.size || 20,
+    bold: !!opts.bold, color: opts.color || "1A1A1A", italics: !!opts.italics,
+  });
+
+  const headerCell = (text, w) => new TableCell({
+    borders: headerBorders, width: { size: w, type: WidthType.DXA },
+    shading: { fill: "2E5C8A", type: ShadingType.CLEAR, color: "auto" },
+    margins: { top: 100, bottom: 100, left: 140, right: 140 },
+    verticalAlign: VerticalAlign.CENTER,
+    children: [new Paragraph({ children: [txt(text, { bold: true, color: "FFFFFF" })] })],
+  });
+
+  const bodyCell = (text, w, opts = {}) => new TableCell({
+    borders, width: { size: w, type: WidthType.DXA },
+    shading: opts.fill ? { fill: opts.fill, type: ShadingType.CLEAR, color: "auto" } : undefined,
+    margins: { top: 100, bottom: 100, left: 140, right: 140 },
+    verticalAlign: VerticalAlign.TOP,
+    children: [new Paragraph({ children: [txt(text, opts)] })],
+  });
+
+  // Phase summary table
+  const phaseTable = new Table({
+    width: { size: 12960, type: WidthType.DXA },
+    columnWidths: [1400, 2400, 2400, 6760],
+    rows: [
+      new TableRow({ tableHeader: true, children: [
+        headerCell("Phase", 1400), headerCell("Weeks", 2400),
+        headerCell("Dates", 2400), headerCell("Focus", 6760),
+      ]}),
+      ...plan.phases.map(p => new TableRow({ children: [
+        bodyCell(`Phase ${p.number}`, 1400, { bold: true }),
+        bodyCell(`Weeks ${p.weeks}`, 2400),
+        bodyCell(p.dates, 2400),
+        bodyCell(p.focus, 6760),
+      ]})),
+    ],
+  });
+
+  // Action table columns
+  const COL = { phase: 900, week: 800, track: 1400, action: 3900, cadence: 1400, target: 1200, completed: 1200, comments: 2160 };
+  const actionTable = new Table({
+    width: { size: 12960, type: WidthType.DXA },
+    columnWidths: [COL.phase, COL.week, COL.track, COL.action, COL.cadence, COL.target, COL.completed, COL.comments],
+    rows: [
+      new TableRow({ tableHeader: true, children: [
+        headerCell("Phase", COL.phase), headerCell("Week", COL.week), headerCell("Track", COL.track),
+        headerCell("Action / Deliverable", COL.action), headerCell("Cadence", COL.cadence),
+        headerCell("Target Date", COL.target), headerCell("Completed", COL.completed), headerCell("Comments", COL.comments),
+      ]}),
+      ...plan.actions.map(a => new TableRow({ children: [
+        bodyCell(a.phase, COL.phase, { bold: true, size: 16 }),
+        bodyCell(a.week, COL.week, { size: 16 }),
+        bodyCell(a.track, COL.track, { bold: true, size: 16 }),
+        bodyCell(a.action, COL.action, { size: 18 }),
+        bodyCell(a.cadence, COL.cadence, { italics: true, size: 16 }),
+        bodyCell(a.target, COL.target, { size: 16 }),
+        bodyCell("", COL.completed),
+        bodyCell("", COL.comments),
+      ]})),
+    ],
+  });
+
+  // Rules table
+  const rulesTable = new Table({
+    width: { size: 12960, type: WidthType.DXA },
+    columnWidths: [3200, 9760],
+    rows: [
+      new TableRow({ tableHeader: true, children: [headerCell("Rule", 3200), headerCell("Detail", 9760)] }),
+      ...plan.rules.map(r => new TableRow({ children: [
+        bodyCell(r.rule, 3200, { bold: true }),
+        bodyCell(r.detail, 9760),
+      ]})),
+    ],
+  });
+
+  // Weekly ledger - one row per week of the plan
+  // Columns: Week | Date Range | Focus This Week | What I Did | Wins / Highlights | Blockers / Misses | Next Week's Priority
+  const LEDGER_COL = { week: 700, dates: 1700, focus: 1700, did: 2500, wins: 2100, blockers: 1900, next: 2360 };
+  const ledgerRows = [];
+  const ledgerStart = new Date();
+  const totalWeeks = plan.weeks || 16;
+  for (let w = 1; w <= totalWeeks; w++) {
+    const weekStart = addDays(ledgerStart, (w - 1) * 7);
+    const weekEnd = addDays(ledgerStart, w * 7 - 1);
+    const dateRange = `${fmt(weekStart)} to ${fmt(weekEnd)}`;
+    const fill = w % 4 === 0 ? "F2F2F2" : undefined; // shade every 4th week as visual milestone
+    ledgerRows.push(new TableRow({ children: [
+      bodyCell(`W${w}`, LEDGER_COL.week, { bold: true, fill }),
+      bodyCell(dateRange, LEDGER_COL.dates, { fill, size: 16 }),
+      bodyCell("", LEDGER_COL.focus, { fill }),
+      bodyCell("", LEDGER_COL.did, { fill }),
+      bodyCell("", LEDGER_COL.wins, { fill }),
+      bodyCell("", LEDGER_COL.blockers, { fill }),
+      bodyCell("", LEDGER_COL.next, { fill }),
+    ]}));
+  }
+  const ledgerTable = new Table({
+    width: { size: 12960, type: WidthType.DXA },
+    columnWidths: [LEDGER_COL.week, LEDGER_COL.dates, LEDGER_COL.focus, LEDGER_COL.did, LEDGER_COL.wins, LEDGER_COL.blockers, LEDGER_COL.next],
+    rows: [
+      new TableRow({ tableHeader: true, children: [
+        headerCell("Week", LEDGER_COL.week),
+        headerCell("Date Range", LEDGER_COL.dates),
+        headerCell("Focus This Week", LEDGER_COL.focus),
+        headerCell("What I Did", LEDGER_COL.did),
+        headerCell("Wins / Highlights", LEDGER_COL.wins),
+        headerCell("Blockers / Misses", LEDGER_COL.blockers),
+        headerCell("Next Week's Priority", LEDGER_COL.next),
+      ]}),
+      ...ledgerRows,
+    ],
+  });
+
+  const doc = new Document({
+    creator: "Career Plan Generator",
+    title: `${userName || "Personal"} Career Plan`,
+    styles: {
+      default: { document: { run: { font: "Calibri", size: 22 } } },
+      paragraphStyles: [
+        { id: "Heading1", name: "Heading 1", basedOn: "Normal", next: "Normal", quickFormat: true,
+          run: { size: 36, bold: true, font: "Calibri", color: "1F3864" },
+          paragraph: { spacing: { before: 360, after: 200 }, outlineLevel: 0 } },
+        { id: "Heading2", name: "Heading 2", basedOn: "Normal", next: "Normal", quickFormat: true,
+          run: { size: 28, bold: true, font: "Calibri", color: "2E5C8A" },
+          paragraph: { spacing: { before: 280, after: 140 }, outlineLevel: 1 } },
+      ],
+    },
+    sections: [{
+      properties: {
+        page: { size: { width: 12240, height: 15840, orientation: PageOrientation.LANDSCAPE },
+                margin: { top: 1080, right: 1440, bottom: 1080, left: 1440 } },
+      },
+      children: [
+        new Paragraph({ children: [txt(`${plan.weeks}-Week Career Plan — Personal Tracker`)], heading: HeadingLevel.HEADING_1 }),
+        new Paragraph({ children: [txt(`Generated: ${fmt(new Date())}  |  Plan length: ${plan.weeks} weeks  |  ${plan.hoursPerDay} hrs/day`, { italics: true, color: "606060" })], spacing: { after: 280 } }),
+        new Paragraph({ children: [txt("Phase Summary")], heading: HeadingLevel.HEADING_2 }),
+        phaseTable,
+        new Paragraph({ children: [txt("Ground Rules")], heading: HeadingLevel.HEADING_2, spacing: { before: 280 } }),
+        rulesTable,
+        new Paragraph({ children: [txt("Action Plan")], heading: HeadingLevel.HEADING_1, pageBreakBefore: true }),
+        actionTable,
+        new Paragraph({ children: [txt(`Weekly Ledger (${totalWeeks} weeks)`)], heading: HeadingLevel.HEADING_1, pageBreakBefore: true }),
+        new Paragraph({ children: [txt("Fill in each week as you progress. Every 4th week is shaded as a checkpoint milestone — use those to review momentum.", { italics: true, color: "606060", size: 18 })], spacing: { after: 200 } }),
+        ledgerTable,
+      ],
+    }],
+  });
+
+  return await Packer.toBlob(doc);
+}
+
+// ============================================================
+// UI COMPONENTS
+// ============================================================
+
+function DateBadge() {
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 30000); // update every 30 sec
+    return () => clearInterval(t);
+  }, []);
+  const dateStr = now.toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
+  const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+  return (
+    <div className="fixed top-4 right-4 z-50 date-badge px-3 py-1.5 rounded-full text-xs text-stone-700 font-medium shadow-sm no-print">
+      <span className="text-teal-700">●</span> {dateStr} · {timeStr}
+    </div>
+  );
+}
+
+function ProgressBar({ step, total }) {
+  return (
+    <div className="mb-8">
+      <div className="flex items-center gap-2 mb-2">
+        {Array.from({ length: total }).map((_, i) => (
+          <div
+            key={i}
+            className={`h-1.5 flex-1 rounded-full progress-pill ${
+              i < step ? 'bg-gradient-to-r from-teal-500 to-emerald-500' :
+              i === step ? 'bg-gradient-to-r from-teal-500 to-emerald-500' :
+              'bg-stone-200'
+            }`}
+          />
+        ))}
+      </div>
+      <div className="flex justify-between items-center text-xs text-stone-500">
+        <span>Step <span className="font-semibold text-teal-700">{step + 1}</span> of {total}</span>
+        <span>{Math.round(((step + 1) / total) * 100)}% complete</span>
+      </div>
+    </div>
+  );
+}
+
+function SkillRanker({ skills, setSkills, placeholder, label, helpText }) {
+  const [input, setInput] = useState("");
+  const addSkill = () => {
+    const trimmed = input.trim();
+    if (trimmed && !skills.includes(trimmed) && skills.length < 8) {
+      setSkills([...skills, trimmed]);
+      setInput("");
+    }
+  };
+  const removeSkill = (idx) => setSkills(skills.filter((_, i) => i !== idx));
+  const moveSkill = (idx, dir) => {
+    const newSkills = [...skills];
+    const target = idx + dir;
+    if (target < 0 || target >= newSkills.length) return;
+    [newSkills[idx], newSkills[target]] = [newSkills[target], newSkills[idx]];
+    setSkills(newSkills);
+  };
+
+  return (
+    <div className="mb-5">
+      <label className="block text-sm font-medium text-stone-800 mb-1">{label}</label>
+      {helpText && <p className="text-xs text-stone-500 mb-2">{helpText}</p>}
+      <div className="flex gap-2 mb-3">
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addSkill())}
+          placeholder={placeholder}
+          className="flex-1 px-3 py-2 border border-stone-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-teal-700"
+          maxLength={60}
+        />
+        <button onClick={addSkill} disabled={!input.trim() || skills.length >= 8} className="px-4 py-2 bg-teal-700 text-white rounded-md text-sm font-medium hover:bg-teal-800 disabled:bg-stone-300 disabled:cursor-not-allowed">Add</button>
+      </div>
+      {skills.length === 0 && <p className="text-xs text-stone-400 italic">No skills added yet</p>}
+      <div className="space-y-2">
+        {skills.map((skill, idx) => (
+          <div key={`${skill}-${idx}`} className="flex items-center gap-2 bg-stone-50 border border-stone-200 rounded-md px-3 py-2 skill-pill fade-in">
+            <span className="text-xs font-bold text-teal-700 w-6">#{idx + 1}</span>
+            <span className="flex-1 text-sm text-stone-800">{skill}</span>
+            <button onClick={() => moveSkill(idx, -1)} disabled={idx === 0} className="text-stone-500 hover:text-stone-800 disabled:opacity-30 px-1" aria-label="Move up">↑</button>
+            <button onClick={() => moveSkill(idx, 1)} disabled={idx === skills.length - 1} className="text-stone-500 hover:text-stone-800 disabled:opacity-30 px-1" aria-label="Move down">↓</button>
+            <button onClick={() => removeSkill(idx)} className="text-stone-400 hover:text-red-600 px-1" aria-label="Remove">×</button>
+          </div>
+        ))}
+      </div>
+      <p className="text-xs text-stone-400 mt-2">{skills.length}/8 skills</p>
+    </div>
+  );
+}
+
+function FileUpload({ label, file, setFile, accept, helpText, warning }) {
+  const inputRef = useRef(null);
+  return (
+    <div className="mb-5">
+      <label className="block text-sm font-medium text-stone-800 mb-1">{label}</label>
+      {helpText && <p className="text-xs text-stone-500 mb-2">{helpText}</p>}
+      <div className="flex items-center gap-3">
+        <input
+          ref={inputRef}
+          type="file"
+          accept={accept}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f && f.size > 5 * 1024 * 1024) {
+              alert("File too large. Maximum 5MB.");
+              return;
+            }
+            setFile(f || null);
+          }}
+          className="hidden"
+        />
+        <button onClick={() => inputRef.current?.click()} className="px-4 py-2 border border-stone-300 rounded-md text-sm hover:bg-stone-50">
+          {file ? "Change file" : "Choose file"}
+        </button>
+        <span className="text-sm text-stone-600">
+          {file ? file.name : "No file chosen"}
+        </span>
+        {file && <button onClick={() => setFile(null)} className="text-stone-400 hover:text-red-600 text-sm">Remove</button>}
+      </div>
+      {warning && !file && <p className="text-xs text-amber-700 mt-2 bg-amber-50 border border-amber-200 rounded px-2 py-1">⚠ {warning}</p>}
+    </div>
+  );
+}
+
+// ============================================================
+// MAIN APP
+// ============================================================
+
+function App() {
+  const [screen, setScreen] = useState("landing"); // landing | form | generating | preview | success
+  const [step, setStep] = useState(0);
+  const [error, setError] = useState(null);
+
+  // Form state
+  const [resumeFile, setResumeFile] = useState(null);
+  const [resumeText, setResumeText] = useState("");
+  const [age, setAge] = useState("");
+  const [techSkills, setTechSkills] = useState([]);
+  const [nonTechSkills, setNonTechSkills] = useState([]);
+  const [hoursPerDay, setHoursPerDay] = useState(2);
+  const [working, setWorking] = useState(true);
+  const [weeks, setWeeks] = useState(16);
+  const [jdText, setJdText] = useState("");
+  const [jdFile, setJdFile] = useState(null);
+
+  // Output state
+  const [plan, setPlan] = useState(null);
+  const [rating, setRating] = useState(0);
+  const [feedback, setFeedback] = useState("");
+  const [donationConfirmed, setDonationConfirmed] = useState(false);
+  const [showConfirmDonation, setShowConfirmDonation] = useState(false);
+  const [paymentRef, setPaymentRef] = useState("");
+  const [verifying, setVerifying] = useState(false);
+  const [verifyError, setVerifyError] = useState("");
+  const [downloadToken, setDownloadToken] = useState("");
+
+  const totalSteps = 6;
+
+  const canProceedStep = (s) => {
+    if (s === 0) return true; // Resume optional
+    if (s === 1) return age && parseInt(age) >= 16 && parseInt(age) <= 80;
+    if (s === 2) return techSkills.length > 0;
+    if (s === 3) return true; // Non-tech optional
+    if (s === 4) return hoursPerDay > 0;
+    if (s === 5) return weeks >= 4 && weeks <= 52;
+    return true;
+  };
+
+  const handleGenerate = async () => {
+    const sessionCount = getSessionCount();
+    if (sessionCount >= APP_CONFIG.maxPlansPerSession) {
+      setError(`You've generated ${sessionCount} plans this session. Please refresh the page to start a new session, or come back later.`);
+      return;
+    }
+
+    setScreen("generating");
+    setError(null);
+
+    const input = {
+      age: parseInt(age),
+      techSkills,
+      nonTechSkills,
+      hoursPerDay,
+      working,
+      weeks,
+      resumeText: resumeText || (resumeFile ? `[Uploaded: ${resumeFile.name}]` : ""),
+      jdText: jdText || (jdFile ? `[Uploaded: ${jdFile.name}]` : ""),
+    };
+
+    try {
+      let result;
+      try {
+        result = await generateAIPlan(input);
+      } catch (apiErr) {
+        console.warn('Backend unavailable, using rule-based fallback:', apiErr.message);
+        await new Promise(r => setTimeout(r, 1000));
+        result = generateRuleBasedPlan(input);
+        result.fallbackReason = apiErr.message;
+      }
+      incSessionCount();
+      setPlan(result);
+      setScreen("preview");
+    } catch (e) {
+      setError(`Generation failed: ${e.message}`);
+      setScreen("form");
+    }
+  };
+
+  const handleVerifyPayment = async () => {
+    if (!paymentRef.startsWith('pay_') || paymentRef.length < 10) {
+      setVerifyError("Payment ID should start with 'pay_' followed by alphanumeric characters.");
+      return;
+    }
+    setVerifying(true);
+    setVerifyError("");
+    try {
+      const result = await verifyPayment(paymentRef, plan.planHash || "no-hash");
+      if (result.verified) {
+        setDownloadToken(result.token);
+        setDonationConfirmed(true);
+      } else {
+        setVerifyError("Payment could not be verified. Please check the ID and try again.");
+      }
+    } catch (e) {
+      setVerifyError(e.message || "Verification failed. Please email support with your Payment ID.");
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  const handleDownloadDocx = async () => {
+    try {
+      const blob = await generateDocx(plan, "User");
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Career_Plan_${fmt(new Date()).replace(/-/g, '_')}.docx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setTimeout(() => setScreen("success"), 500);
+    } catch (e) {
+      alert(`Download failed: ${e.message}`);
+    }
+  };
+
+  const handleDownloadPdf = () => {
+    window.print();
+    setTimeout(() => setScreen("success"), 500);
+  };
+
+  // ============================================================
+  // RENDER
+  // ============================================================
+
+  if (screen === "landing") {
+    return (
+      <React.Fragment>
+        <DateBadge />
+        <div className="min-h-screen flex items-center justify-center px-4 py-12">
+        <div className="max-w-2xl w-full">
+          <div className="text-center mb-12">
+            <div className="inline-block px-3 py-1 bg-teal-50 border border-teal-200 rounded-full text-xs font-medium text-teal-800 mb-5">
+              ✨ AI-powered · Built with Claude Sonnet 4.5
+            </div>
+            <h1 className="text-5xl font-bold mb-4 tracking-tight gradient-text">
+              {APP_CONFIG.name}
+            </h1>
+            <p className="text-lg text-stone-600 max-w-lg mx-auto">{APP_CONFIG.tagline}</p>
+          </div>
+
+          <div className="page-frame p-8 mb-6">
+            <h2 className="text-lg font-semibold text-stone-900 mb-5 flex items-center gap-2">
+              <span className="inline-flex items-center justify-center w-6 h-6 bg-teal-100 text-teal-700 rounded-full text-xs font-bold">i</span>
+              How it works
+            </h2>
+            <ol className="space-y-4 text-sm text-stone-700">
+              <li className="flex gap-4 items-start">
+                <span className="inline-flex items-center justify-center w-7 h-7 bg-gradient-to-br from-teal-500 to-emerald-600 text-white rounded-full text-xs font-bold flex-shrink-0">1</span>
+                <span className="pt-0.5">Tell us your skills, hours, and goals (takes ~3 minutes)</span>
+              </li>
+              <li className="flex gap-4 items-start">
+                <span className="inline-flex items-center justify-center w-7 h-7 bg-gradient-to-br from-teal-500 to-emerald-600 text-white rounded-full text-xs font-bold flex-shrink-0">2</span>
+                <span className="pt-0.5">Get a personalized phased plan with action items, target dates, and a weekly ledger</span>
+              </li>
+              <li className="flex gap-4 items-start">
+                <span className="inline-flex items-center justify-center w-7 h-7 bg-gradient-to-br from-teal-500 to-emerald-600 text-white rounded-full text-xs font-bold flex-shrink-0">3</span>
+                <span className="pt-0.5">Download as Word or PDF — yours forever, no signup required</span>
+              </li>
+            </ol>
+          </div>
+
+          <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-2xl p-5 mb-8 text-sm text-amber-900 flex gap-3">
+            <span className="text-xl flex-shrink-0">💡</span>
+            <div>
+              <p className="font-semibold mb-1">Free preview while in beta</p>
+              <p className="text-amber-800">Generation costs me ~$0.05-0.10 per plan via the Anthropic API. Right now, everything is free. Once payments are enabled, you'll be able to support with a small donation.</p>
+            </div>
+          </div>
+
+          <button
+            onClick={() => setScreen("form")}
+            className="w-full bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 text-white text-base font-semibold py-4 rounded-xl btn-lift shadow-lg shadow-teal-600/20"
+          >
+            Generate my plan →
+          </button>
+
+          <div className="text-center mt-10 text-xs text-stone-500">
+            <p>Built with Claude</p>
+          </div>
+        </div>
+      </div>
+      </React.Fragment>
+    );
+  }
+
+  if (screen === "form") {
+    return (
+      <React.Fragment>
+        <DateBadge />
+        <div className="min-h-screen px-4 py-10">
+        <div className="max-w-2xl mx-auto">
+          <ProgressBar step={step} total={totalSteps} />
+
+          <div className="page-frame p-8">
+          {step === 0 && (
+            <div className="fade-in">
+              <h2 className="text-2xl font-medium text-stone-900 mb-2">Your background</h2>
+              <p className="text-sm text-stone-600 mb-6">Optional but helpful. The plan adapts to your current experience.</p>
+              <FileUpload
+                label="Resume / CV"
+                file={resumeFile}
+                setFile={setResumeFile}
+                accept=".pdf,.doc,.docx"
+                helpText="PDF or Word, max 5MB"
+                warning="No resume attached — the plan will be more generic without your background context"
+              />
+              <div className="mb-5">
+                <label className="block text-sm font-medium text-stone-800 mb-1">Or paste your background</label>
+                <p className="text-xs text-stone-500 mb-2">Paste key points from your resume — current role, years of experience, notable projects. This helps the AI personalize better than just a file name.</p>
+                <textarea
+                  value={resumeText}
+                  onChange={(e) => setResumeText(e.target.value.slice(0, 2000))}
+                  placeholder="e.g. Tableau Developer with 10+ years experience in BI. Currently transitioning to Power BI. Background in finance domain (Wipro). Strong in dashboard design, weak in DAX and Python..."
+                  className="w-full px-3 py-2 border border-stone-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-teal-700 min-h-32"
+                  maxLength={2000}
+                />
+                <p className="text-xs text-stone-400 mt-1">{resumeText.length}/2000 characters</p>
+              </div>
+            </div>
+          )}
+
+          {step === 1 && (
+            <div className="fade-in">
+              <h2 className="text-2xl font-medium text-stone-900 mb-2">Your age</h2>
+              <p className="text-sm text-stone-600 mb-6">Helps us calibrate timeline expectations and career stage.</p>
+              <input
+                type="number"
+                value={age}
+                onChange={(e) => setAge(e.target.value)}
+                min="16"
+                max="80"
+                placeholder="e.g. 34"
+                className="w-32 px-3 py-2 border border-stone-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-teal-700"
+              />
+              {age && (parseInt(age) < 16 || parseInt(age) > 80) && <p className="text-xs text-red-600 mt-2">Please enter an age between 16 and 80.</p>}
+            </div>
+          )}
+
+          {step === 2 && (
+            <div className="fade-in">
+              <h2 className="text-2xl font-medium text-stone-900 mb-2">Technical skills to learn</h2>
+              <p className="text-sm text-stone-600 mb-6">In order of importance. The plan invests most time in your top 2-3.</p>
+              <SkillRanker
+                skills={techSkills}
+                setSkills={setTechSkills}
+                placeholder="e.g. Power BI, Python, Tableau, SQL..."
+                label="Add skills (drag to reorder)"
+                helpText="Add at least 1, up to 8. Use ↑ ↓ to reorder."
+              />
+            </div>
+          )}
+
+          {step === 3 && (
+            <div className="fade-in">
+              <h2 className="text-2xl font-medium text-stone-900 mb-2">Non-technical skills</h2>
+              <p className="text-sm text-stone-600 mb-6">Communication, stakeholder management, writing, etc. Optional.</p>
+              <SkillRanker
+                skills={nonTechSkills}
+                setSkills={setNonTechSkills}
+                placeholder="e.g. Public speaking, technical writing..."
+                label="Add skills (drag to reorder)"
+                helpText="Add up to 8. Use ↑ ↓ to reorder."
+              />
+            </div>
+          )}
+
+          {step === 4 && (
+            <div className="fade-in">
+              <h2 className="text-2xl font-medium text-stone-900 mb-2">Time available</h2>
+              <p className="text-sm text-stone-600 mb-6">Hours per day for learning, outside of work.</p>
+
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-stone-800 mb-2">Are you currently working?</label>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setWorking(true)}
+                    className={`flex-1 py-3 px-4 rounded-md border-2 text-sm font-medium transition-all ${working ? 'border-teal-700 bg-teal-50 text-teal-800' : 'border-stone-200 hover:border-stone-300'}`}
+                  >
+                    Yes, full-time
+                  </button>
+                  <button
+                    onClick={() => setWorking(false)}
+                    className={`flex-1 py-3 px-4 rounded-md border-2 text-sm font-medium transition-all ${!working ? 'border-teal-700 bg-teal-50 text-teal-800' : 'border-stone-200 hover:border-stone-300'}`}
+                  >
+                    No / part-time
+                  </button>
+                </div>
+              </div>
+
+              <div className="mb-5">
+                <label className="block text-sm font-medium text-stone-800 mb-1">Hours per day for learning</label>
+                <p className="text-xs text-stone-500 mb-3">Outside of your day job. Be realistic — sustainable beats heroic.</p>
+                <div className="flex items-center gap-4">
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="8"
+                    step="0.5"
+                    value={hoursPerDay}
+                    onChange={(e) => setHoursPerDay(parseFloat(e.target.value))}
+                    className="flex-1"
+                  />
+                  <span className="text-2xl font-medium text-teal-700 w-20 text-right">{hoursPerDay}h</span>
+                </div>
+                {hoursPerDay > 4 && working && (
+                  <p className="text-xs text-amber-700 mt-2">⚠ {hoursPerDay}h/day + full-time work is a lot. Most people sustain 1-3h/day. Consider being conservative.</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {step === 5 && (
+            <div className="fade-in">
+              <h2 className="text-2xl font-medium text-stone-900 mb-2">Plan length & target role</h2>
+              <p className="text-sm text-stone-600 mb-6">How long is your runway, and what role are you targeting?</p>
+
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-stone-800 mb-1">Plan length (weeks)</label>
+                <p className="text-xs text-stone-500 mb-3">4-52 weeks. 16 weeks is a common sweet spot.</p>
+                <div className="flex items-center gap-4">
+                  <input
+                    type="range"
+                    min="4"
+                    max="52"
+                    step="1"
+                    value={weeks}
+                    onChange={(e) => setWeeks(parseInt(e.target.value))}
+                    className="flex-1"
+                  />
+                  <span className="text-2xl font-medium text-teal-700 w-24 text-right">{weeks} wk</span>
+                </div>
+              </div>
+
+              <div className="mb-5">
+                <label className="block text-sm font-medium text-stone-800 mb-1">Target job description (optional)</label>
+                <p className="text-xs text-stone-500 mb-2">Paste a JD you want to qualify for. The plan will weight toward its requirements.</p>
+                <textarea
+                  value={jdText}
+                  onChange={(e) => setJdText(e.target.value.slice(0, 3000))}
+                  placeholder="Paste the full JD here..."
+                  className="w-full px-3 py-2 border border-stone-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-teal-700 min-h-24"
+                  maxLength={3000}
+                />
+                <p className="text-xs text-stone-400 mt-1">{jdText.length}/3000 characters</p>
+              </div>
+            </div>
+          )}
+
+          {error && <div className="bg-red-50 border border-red-200 text-red-800 rounded-lg px-4 py-3 text-sm mb-4">{error}</div>}
+
+          <div className="flex gap-3 mt-8 pt-6 border-t border-stone-100">
+            {step > 0 && (
+              <button onClick={() => setStep(step - 1)} className="px-6 py-2.5 border border-stone-300 rounded-lg text-sm font-medium hover:bg-stone-50 transition-colors">
+                ← Back
+              </button>
+            )}
+            <div className="flex-1" />
+            {step < totalSteps - 1 ? (
+              <button
+                onClick={() => canProceedStep(step) && setStep(step + 1)}
+                disabled={!canProceedStep(step)}
+                className="px-6 py-2.5 bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 text-white rounded-lg text-sm font-semibold btn-lift disabled:from-stone-300 disabled:to-stone-300 disabled:cursor-not-allowed disabled:shadow-none"
+              >
+                Continue →
+              </button>
+            ) : (
+              <button
+                onClick={handleGenerate}
+                disabled={!canProceedStep(step)}
+                className="px-7 py-2.5 bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 text-white rounded-lg text-sm font-semibold btn-lift disabled:from-stone-300 disabled:to-stone-300 disabled:cursor-not-allowed disabled:shadow-none"
+              >
+                Generate my plan ✨
+              </button>
+            )}
+          </div>
+          </div>
+
+          <div className="text-center mt-6 text-xs text-stone-500">
+            <button onClick={() => setScreen("landing")} className="hover:underline">← Back to start</button>
+          </div>
+        </div>
+      </div>
+      </React.Fragment>
+    );
+  }
+
+  if (screen === "generating") {
+    return (
+      <React.Fragment>
+        <DateBadge />
+        <div className="min-h-screen flex items-center justify-center px-4">
+        <div className="text-center">
+          <div className="relative inline-flex mb-6">
+            <div className="w-20 h-20 bg-gradient-to-br from-teal-500 to-emerald-600 rounded-2xl flex items-center justify-center shadow-lg shadow-teal-500/30">
+              <span className="text-3xl">✨</span>
+            </div>
+          </div>
+          <div className="flex items-center justify-center gap-1.5 mb-5">
+            <div className="w-2 h-2 bg-teal-600 rounded-full pulse-dot" />
+            <div className="w-2 h-2 bg-teal-600 rounded-full pulse-dot" />
+            <div className="w-2 h-2 bg-teal-600 rounded-full pulse-dot" />
+          </div>
+          <h2 className="text-2xl font-bold text-stone-900 mb-2">Building your plan...</h2>
+          <p className="text-sm text-stone-600 max-w-sm">Analyzing your skills · Mapping phases · Scheduling actions</p>
+          <p className="text-xs text-stone-400 mt-6">This usually takes 10-30 seconds</p>
+        </div>
+      </div>
+      </React.Fragment>
+    );
+  }
+
+  if (screen === "preview" && plan) {
+    return (
+      <React.Fragment>
+        <DateBadge />
+        <div className="min-h-screen px-4 py-10">
+        <div className="max-w-4xl mx-auto">
+          <div className="bg-gradient-to-r from-teal-50 to-emerald-50 border border-teal-200 rounded-2xl p-5 mb-8 no-print">
+            <div className="flex items-start gap-3">
+              <span className="text-2xl">✨</span>
+              <div className="flex-1">
+                <h3 className="font-semibold text-teal-900 mb-1">Your plan is ready</h3>
+                <p className="text-sm text-teal-800">Review it below. The full version (with weekly ledger) is in the downloadable Word/PDF.</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="mb-8">
+            <h1 className="text-4xl font-bold mb-2 gradient-text">{plan.weeks}-Week Career Plan</h1>
+            <div className="flex flex-wrap gap-2 text-xs">
+              <span className="px-3 py-1 bg-stone-100 text-stone-700 rounded-full">Generated {fmt(new Date())}</span>
+              <span className="px-3 py-1 bg-teal-50 text-teal-700 rounded-full">{plan.hoursPerDay} hrs/day</span>
+              <span className="px-3 py-1 bg-emerald-50 text-emerald-700 rounded-full">
+                {plan.source === "ai" ? "✨ AI-personalized" : "Rule-based plan"}
+              </span>
+            </div>
+          </div>
+
+          {plan.recommended_tenure_weeks && plan.recommended_tenure_weeks !== plan.weeks && (
+            <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-300 rounded-2xl p-5 mb-8">
+              <p className="text-sm text-amber-900"><strong>💭 Honest recommendation:</strong> Based on your inputs, {plan.recommended_tenure_weeks} weeks would be a better fit than {plan.weeks}. {plan.tenure_reasoning}</p>
+            </div>
+          )}
+
+          <div className="surface-card p-6 mb-8">
+            <h2 className="text-xl font-bold text-stone-900 mb-4 flex items-center gap-2">
+              <span className="w-1 h-6 bg-gradient-to-b from-teal-500 to-emerald-600 rounded-full"></span>
+              Phase Summary
+            </h2>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gradient-to-r from-teal-50 to-emerald-50">
+                  <tr>
+                    <th className="text-left px-4 py-3 font-semibold text-stone-700 first:rounded-tl-lg">Phase</th>
+                    <th className="text-left px-4 py-3 font-semibold text-stone-700">Weeks</th>
+                    <th className="text-left px-4 py-3 font-semibold text-stone-700">Dates</th>
+                    <th className="text-left px-4 py-3 font-semibold text-stone-700 last:rounded-tr-lg">Focus</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {plan.phases.map((p, i) => (
+                    <tr key={i} className="border-b border-stone-100 hover:bg-stone-50 transition-colors">
+                      <td className="px-4 py-3 font-semibold text-teal-700">Phase {p.number}</td>
+                      <td className="px-4 py-3">{p.weeks}</td>
+                      <td className="px-4 py-3 text-stone-600 text-xs">{p.dates}</td>
+                      <td className="px-4 py-3">{p.focus}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="surface-card p-6 mb-8">
+            <h2 className="text-xl font-bold text-stone-900 mb-4 flex items-center gap-2">
+              <span className="w-1 h-6 bg-gradient-to-b from-teal-500 to-emerald-600 rounded-full"></span>
+              Action Plan
+              <span className="ml-auto text-sm font-normal text-stone-500">{plan.actions.length} items</span>
+            </h2>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gradient-to-r from-teal-50 to-emerald-50">
+                  <tr>
+                    <th className="text-left px-3 py-3 font-semibold text-stone-700">Phase</th>
+                    <th className="text-left px-3 py-3 font-semibold text-stone-700">Week</th>
+                    <th className="text-left px-3 py-3 font-semibold text-stone-700">Track</th>
+                    <th className="text-left px-3 py-3 font-semibold text-stone-700">Action</th>
+                    <th className="text-left px-3 py-3 font-semibold text-stone-700">Cadence</th>
+                    <th className="text-left px-3 py-3 font-semibold text-stone-700">Target</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {plan.actions.map((a, i) => (
+                    <tr key={i} className="border-b border-stone-100 hover:bg-stone-50 transition-colors">
+                      <td className="px-3 py-3 text-xs font-semibold text-teal-700 whitespace-nowrap">{a.phase}</td>
+                      <td className="px-3 py-3 text-xs">{a.week}</td>
+                      <td className="px-3 py-3 text-xs font-medium text-stone-800">{a.track}</td>
+                      <td className="px-3 py-3">{a.action}</td>
+                      <td className="px-3 py-3 text-xs italic text-stone-500">{a.cadence}</td>
+                      <td className="px-3 py-3 text-xs text-stone-600 whitespace-nowrap">{a.target}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="surface-card p-6 mb-8">
+            <h2 className="text-xl font-bold text-stone-900 mb-4 flex items-center gap-2">
+              <span className="w-1 h-6 bg-gradient-to-b from-teal-500 to-emerald-600 rounded-full"></span>
+              Ground Rules
+            </h2>
+            <div className="space-y-3">
+              {plan.rules.map((r, i) => (
+                <div key={i} className="bg-gradient-to-r from-stone-50 to-stone-100/50 border border-stone-200 rounded-xl p-4 hover:border-teal-300 transition-colors">
+                  <p className="font-semibold text-sm text-stone-900 mb-1.5 flex items-center gap-2">
+                    <span className="inline-flex items-center justify-center w-5 h-5 bg-teal-100 text-teal-700 rounded-full text-xs font-bold">{i + 1}</span>
+                    {r.rule}
+                  </p>
+                  <p className="text-sm text-stone-700 ml-7">{r.detail}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="relative overflow-hidden rounded-2xl mb-8 no-print shadow-2xl">
+            <div className="absolute inset-0 bg-gradient-to-br from-teal-600 via-emerald-600 to-teal-700" />
+            <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full -mr-32 -mt-32" />
+            <div className="absolute bottom-0 left-0 w-48 h-48 bg-white/5 rounded-full -ml-24 -mb-24" />
+            <div className="relative p-7 text-white">
+              <div className="flex items-start gap-3 mb-5">
+                <div className="w-12 h-12 bg-white/15 backdrop-blur-sm rounded-xl flex items-center justify-center text-2xl flex-shrink-0">
+                  ⬇️
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-2xl font-bold mb-1">Download your plan</h3>
+                  <p className="text-sm text-teal-50">Word and PDF formats with a weekly ledger built in</p>
+                </div>
+              </div>
+
+              <div className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-4 mb-5">
+                <p className="text-sm text-white leading-relaxed">
+                  <span className="inline-block bg-amber-300 text-amber-900 text-xs font-bold px-2 py-0.5 rounded mr-2">BETA</span>
+                  <strong>Free preview mode.</strong> Downloads are open while the payment gateway is being set up. Once enabled, downloads will move to a small donation model (~₹40 / $0.50) to cover AI generation costs.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap gap-3">
+                <button onClick={handleDownloadDocx} className="px-6 py-3 bg-white text-teal-700 hover:bg-teal-50 rounded-xl text-sm font-bold btn-lift shadow-lg">
+                  ⬇ Download Word
+                </button>
+                <button onClick={handleDownloadPdf} className="px-6 py-3 bg-white text-teal-700 hover:bg-teal-50 rounded-xl text-sm font-bold btn-lift shadow-lg">
+                  ⬇ Download PDF
+                </button>
+              </div>
+
+              <p className="text-xs text-teal-100 mt-5">
+                Found this useful? <a href={APP_CONFIG.linkedinUrl} target="_blank" rel="noopener noreferrer" className="text-white font-semibold underline hover:text-amber-200 transition-colors">Share feedback on LinkedIn</a> — that's the best support right now.
+              </p>
+            </div>
+          </div>
+
+          {/* HONEST FEEDBACK SECTION - visible to all users, downloaded or not */}
+          <div className="surface-card p-7 mb-6 no-print">
+            <div className="flex items-start gap-3 mb-5">
+              <span className="text-3xl">💬</span>
+              <div className="flex-1">
+                <h2 className="text-xl font-bold text-stone-900 mb-1">Honest feedback</h2>
+                <p className="text-sm text-stone-600">This is in beta — your feedback shapes what gets built next.</p>
+              </div>
+            </div>
+
+            <div className="mb-5">
+              <p className="text-sm font-medium text-stone-800 mb-3">How would you rate this plan? (1 = poor · 10 = excellent)</p>
+              <div className="flex flex-wrap gap-2 mb-2">
+                {[1,2,3,4,5,6,7,8,9,10].map(n => (
+                  <button
+                    key={n}
+                    onClick={() => setRating(n)}
+                    className={`w-10 h-10 rounded-lg border-2 text-sm font-bold transition-all btn-lift ${
+                      rating === n
+                        ? 'border-teal-700 bg-gradient-to-br from-teal-600 to-emerald-600 text-white'
+                        : 'border-stone-200 hover:border-teal-400 text-stone-700'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+              {rating > 0 && (
+                <div className="fade-in mt-3">
+                  <textarea
+                    value={feedback}
+                    onChange={(e) => setFeedback(e.target.value.slice(0, 500))}
+                    placeholder={rating >= 8 ? "What worked well? What should stay? (optional)" : "What's missing? What would make this a 9 or 10? (optional)"}
+                    className="w-full px-3 py-2.5 border border-stone-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500 min-h-24"
+                    maxLength={500}
+                  />
+                  <p className="text-xs text-stone-500 mt-1.5">
+                    This rating is private (stays in your browser). For real signal, please share on LinkedIn below.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="border-t border-stone-200 pt-5">
+              <p className="text-sm font-medium text-stone-800 mb-2 flex items-center gap-2">
+                <span>🔗</span> Share publicly &amp; tag me on LinkedIn
+              </p>
+              <p className="text-sm text-stone-600 mb-3">
+                Honest reviews — positive or critical — help me improve this and reach more people. Tag <a href={APP_CONFIG.linkedinUrl} target="_blank" rel="noopener noreferrer" className="text-teal-700 font-medium hover:underline">@Vivek Srivastava</a> so I see it.
+              </p>
+              <a
+                href={`https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(window.location.href)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#0A66C2] hover:bg-[#004182] text-white rounded-lg text-sm font-semibold btn-lift shadow-md"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
+                  <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.063 2.063 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
+                </svg>
+                Write feedback post on LinkedIn
+              </a>
+            </div>
+          </div>
+
+          <div className="text-center text-xs text-stone-500 no-print">
+            <button onClick={() => { setScreen("landing"); setStep(0); setPlan(null); setDonationConfirmed(false); setShowConfirmDonation(false); }} className="hover:underline">Start over</button>
+          </div>
+        </div>
+      </div>
+      </React.Fragment>
+    );
+  }
+
+  if (screen === "success") {
+    return (
+      <React.Fragment>
+        <DateBadge />
+        <div className="min-h-screen flex items-center justify-center px-4 py-8">
+        <div className="max-w-xl w-full">
+          <div className="text-center mb-8">
+            <div className="text-5xl mb-4">🎉</div>
+            <h2 className="text-2xl font-medium text-stone-900 mb-2">Your plan is downloaded</h2>
+            <p className="text-sm text-stone-600">Now the hard part: actually doing it. Start with day 1 tomorrow.</p>
+          </div>
+
+          <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-5 mb-6">
+            <div className="flex items-start gap-3">
+              <span className="text-3xl">💬</span>
+              <div className="flex-1">
+                <h3 className="font-medium text-blue-900 text-base mb-2">Share your feedback on LinkedIn</h3>
+                <p className="text-sm text-blue-900 mb-3">
+                  If this tool helped you, I'd love your honest feedback as a LinkedIn post. Tag me so I can learn from it and improve:
+                </p>
+                <div className="bg-white border border-blue-200 rounded px-3 py-2 mb-3">
+                  <p className="text-sm font-mono text-blue-900 break-all">@Vivek Srivastava</p>
+                  <a
+                    href="https://www.linkedin.com/in/vivek-srivastava-v1991"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-blue-700 hover:underline break-all"
+                  >
+                    linkedin.com/in/vivek-srivastava-v1991
+                  </a>
+                </div>
+                <a
+                  href={`https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(window.location.href)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-block px-5 py-2.5 bg-blue-700 hover:bg-blue-800 text-white rounded-md text-sm font-medium"
+                >
+                  ✍ Write feedback post on LinkedIn
+                </a>
+                <p className="text-xs text-blue-700 mt-3 italic">
+                  Honest reviews (both positive and critical) help more than any rating ever could. Thank you.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white border border-stone-200 rounded-lg p-6 mb-6">
+            <h3 className="font-medium text-stone-900 mb-3">Quick rating (private — stays in your browser)</h3>
+            <div className="flex flex-wrap gap-2 mb-4">
+              {[1,2,3,4,5,6,7,8,9,10].map(n => (
+                <button
+                  key={n}
+                  onClick={() => setRating(n)}
+                  className={`w-10 h-10 rounded-md border-2 text-sm font-medium transition-all ${rating === n ? 'border-teal-700 bg-teal-700 text-white' : 'border-stone-200 hover:border-stone-400'}`}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+            {rating > 0 && (
+              <div className="fade-in">
+                <textarea
+                  value={feedback}
+                  onChange={(e) => setFeedback(e.target.value.slice(0, 500))}
+                  placeholder={rating >= 8 ? "What worked well? (optional)" : "What would make this better? (optional)"}
+                  className="w-full px-3 py-2 border border-stone-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-teal-700 min-h-20"
+                  maxLength={500}
+                />
+                <p className="text-xs text-stone-500 mt-2">
+                  This private rating helps you reflect — it isn't sent anywhere. {rating >= 8 ? "If you also share publicly on LinkedIn above, that's what helps me improve and reach more people." : "Sharing publicly on LinkedIn above gives me actual signal to improve."}
+                </p>
+              </div>
+            )}
+          </div>
+
+          <div className="bg-gradient-to-r from-teal-50 to-emerald-50 border border-teal-200 rounded-2xl p-6 mb-6 text-center">
+            <p className="text-sm text-teal-900 mb-2">🙏 Thanks for using the planner</p>
+            <p className="text-xs text-teal-700">
+              Found it useful? <a href={APP_CONFIG.linkedinUrl} target="_blank" rel="noopener noreferrer" className="font-medium underline hover:text-teal-900">Share your feedback on LinkedIn</a> — that's the best way to support this project right now.
+            </p>
+          </div>
+
+          <div className="text-center space-y-2">
+            <p>
+              <button onClick={() => { setScreen("landing"); setStep(0); setPlan(null); setRating(0); setFeedback(""); setDonationConfirmed(false); setShowConfirmDonation(false); setPaymentRef(""); }} className="text-sm text-stone-600 hover:underline">
+                Generate another plan
+              </button>
+            </p>
+          </div>
+        </div>
+      </div>
+      </React.Fragment>
+    );
+  }
+
+  return <div>Loading...</div>;
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App />);
+</script>
+</body>
+</html>
